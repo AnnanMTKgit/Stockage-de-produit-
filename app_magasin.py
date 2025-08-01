@@ -8,10 +8,11 @@ import pyodbc  # Important de l'importer
 import plotly.express as px
 
 # --- CONFIGURATION DE LA BASE DE DONNÉES ---
-server = 'localhost'
-database = 'MagasinDB'
-username = 'sa'
-password = 'Annan123@'
+db_credentials = st.secrets["database"]
+server = db_credentials["server"]
+database = db_credentials["database"]
+username = db_credentials["username"]
+password = db_credentials["password"]
 DATABASE_URL = f"mssql+pyodbc://{username}:{password}@{server}:1433/{database}?driver=ODBC+Driver+17+for+SQL+Server"
 
 engine = create_engine(DATABASE_URL)
@@ -23,7 +24,8 @@ Base = declarative_base()
 class Produit(Base):
     __tablename__ = "produits"
     id = Column(Integer, primary_key=True)
-    nom = Column(String(255), unique=True, nullable=False)
+    code_produit = Column(String(255), unique=True)
+    nom = Column(String(255), nullable=False)
     description = Column(String)
     prix = Column(Numeric(10, 2), nullable=False)
     quantite = Column(Integer, nullable=False)
@@ -46,16 +48,17 @@ def get_all_products():
 def get_all_sales():
     return session.query(Achat).order_by(Achat.date_achat.desc()).all()
 
-def add_product(nom, description, prix, quantite):
-    nouveau_produit = Produit(nom=nom, description=description, prix=prix, quantite=quantite)
+def add_product(code_produit, nom, description, prix, quantite):
+    nouveau_produit = Produit(code_produit=code_produit, nom=nom, description=description, prix=prix, quantite=quantite)
     session.add(nouveau_produit)
     session.commit()
     st.success(f"Produit '{nom}' ajouté avec succès !")
     st.rerun()
 
-def update_product(id_produit, nom, description, prix, quantite):
+def update_product(id_produit, code_produit, nom, description, prix, quantite):
     produit_a_maj = session.query(Produit).filter(Produit.id == id_produit).first()
     if produit_a_maj:
+        produit_a_maj.code_produit = code_produit
         produit_a_maj.nom = nom
         produit_a_maj.description = description
         produit_a_maj.prix = prix
@@ -121,8 +124,8 @@ if choix == "Tableau de bord":
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Nombre total de produits", total_produits)
-    col2.metric("Valeur totale du stock", f"{valeur_stock_total:.2f} €")
-    col3.metric("Revenu total des ventes", f"{revenu_total:.2f} €")
+    col2.metric("Valeur totale du stock", f"{valeur_stock_total:.2f} FCFA")
+    col3.metric("Revenu total des ventes", f"{revenu_total:.2f} FCFA")
 
     st.markdown("---")
 
@@ -150,7 +153,7 @@ if choix == "Tableau de bord":
     st.subheader("Dernières ventes")
     if achats:
         df_last_sales = pd.DataFrame(
-            [(a.produit.nom, a.quantite, f"{a.prix_total:.2f} €", a.date_achat.strftime('%Y-%m-%d %H:%M')) for a in achats[:10]],
+            [(a.produit.nom, a.quantite, f"{a.prix_total:.2f} FCFA", a.date_achat.strftime('%Y-%m-%d %H:%M')) for a in achats[:10]],
             columns=["Produit", "Quantité", "Prix Total", "Date"]
         )
         st.dataframe(df_last_sales, use_container_width=True)
@@ -161,8 +164,8 @@ elif choix == "Afficher les produits":
     st.header("Liste de tous les produits en stock")
     if produits:
         df = pd.DataFrame(
-            [(p.id, p.nom, p.description, f"{p.prix:.2f} €", p.quantite) for p in produits],
-            columns=["ID", "Nom", "Description", "Prix", "Quantité"]
+            [(p.id, p.code_produit, p.nom, p.description, f"{p.prix:.2f} FCFA", p.quantite) for p in produits],
+            columns=["ID", "Code Produit", "Nom", "Description", "Prix", "Quantité"]
         )
         st.dataframe(df, use_container_width=True)
     else:
@@ -176,16 +179,18 @@ elif choix == "Vendre un produit":
         produit_selectionne_nom = st.selectbox("Choisissez un produit à vendre", options=noms_produits.keys())
         produit_selectionne = noms_produits[produit_selectionne_nom]
         
-        with st.form("vente_form"):
-            st.write(f"Produit : **{produit_selectionne.nom}**")
-            st.write(f"Prix unitaire : **{produit_selectionne.prix:.2f} €**")
-            st.write(f"En stock : **{produit_selectionne.quantite}**")
-            
-            quantite_vente = st.number_input("Quantité à vendre", min_value=1, max_value=produit_selectionne.quantite, step=1)
-            
-            submitted = st.form_submit_button("Vendre")
-            if submitted:
-                sell_product(produit_selectionne, quantite_vente)
+        st.write(f"Produit : **{produit_selectionne.nom}**")
+        st.write(f"Prix unitaire : **{produit_selectionne.prix:.2f} FCFA**")
+        st.write(f"En stock : **{produit_selectionne.quantite}**")
+
+        if produit_selectionne.quantite > 0:
+            with st.form("vente_form"):
+                quantite_vente = st.number_input("Quantité à vendre", min_value=1, max_value=produit_selectionne.quantite, step=1)
+                submitted = st.form_submit_button("Vendre")
+                if submitted:
+                    sell_product(produit_selectionne, quantite_vente)
+        else:
+            st.error("Ce produit est en rupture de stock et ne peut pas être vendu.")
 
 elif choix == "Réapprovisionner le stock":
     st.header("Réapprovisionner le stock d'un produit")
@@ -208,15 +213,16 @@ elif choix == "Réapprovisionner le stock":
 elif choix == "Ajouter un produit":
     st.header("Ajouter un nouveau produit")
     with st.form("ajout_produit_form"):
+        code_produit = st.text_input("Code du produit")
         nom = st.text_input("Nom du produit")
         description = st.text_area("Description")
-        prix = st.number_input("Prix (€)", min_value=0.0, format="%.2f")
+        prix = st.number_input("Prix (FCFA)", min_value=0.0, format="%.2f")
         quantite = st.number_input("Quantité initiale", min_value=0, step=1)
         
         submitted = st.form_submit_button("Ajouter")
         if submitted:
             if nom and prix > 0:
-                add_product(nom, description, prix, quantite)
+                add_product(code_produit, nom, description, prix, quantite)
             else:
                 st.warning("Veuillez remplir au moins le nom et un prix valide.")
 
@@ -230,14 +236,15 @@ elif choix == "Modifier un produit":
 
         with st.form("maj_produit_form"):
             st.write(f"Modification du produit ID: {produit_selectionne.id}")
+            code_produit_maj = st.text_input("Code du produit", value=produit_selectionne.code_produit)
             nom_maj = st.text_input("Nom du produit", value=produit_selectionne.nom)
             description_maj = st.text_area("Description", value=produit_selectionne.description)
-            prix_maj = st.number_input("Prix (€)", min_value=0.0, value=float(produit_selectionne.prix), format="%.2f")
+            prix_maj = st.number_input("Prix (FCFA)", min_value=0.0, value=float(produit_selectionne.prix), format="%.2f")
             quantite_maj = st.number_input("Quantité", min_value=0, value=int(produit_selectionne.quantite), step=1)
             
             submitted = st.form_submit_button("Mettre à jour les informations")
             if submitted:
-                update_product(produit_selectionne.id, nom_maj, description_maj, prix_maj, quantite_maj)
+                update_product(produit_selectionne.id, code_produit_maj, nom_maj, description_maj, prix_maj, quantite_maj)
 
 elif choix == "Supprimer un produit":
     st.header("Supprimer un produit")

@@ -1,10 +1,15 @@
 import pyodbc
 from sqlalchemy import create_engine, text
+import toml
 
 # Configuration de connexion
-server = 'localhost'
-username = 'sa'
-password = 'Annan123@'
+with open('.streamlit/secrets.toml', 'r') as f:
+    secrets = toml.load(f)
+
+db_credentials = secrets["database"]
+server = db_credentials["server"]
+username = db_credentials["username"]
+password = db_credentials["password"]
 
 # Connexion au serveur SQL Server (sans spécifier de base de données)
 try:
@@ -39,16 +44,29 @@ try:
                 create_table_sql = """
                 CREATE TABLE produits (
                     id INT IDENTITY(1,1) PRIMARY KEY,
-                    nom NVARCHAR(255) UNIQUE NOT NULL,
+                    code_produit NVARCHAR(255) UNIQUE,
+                    nom NVARCHAR(255) NOT NULL,
                     description NVARCHAR(MAX),
-                    prix DECIMAL(10,2) NOT NULL,
+                    prix DECIMAL(10, 2) NOT NULL,
                     quantite INT NOT NULL
-                )
+                );
                 """
                 conn.execute(text(create_table_sql))
                 print("Table produits créée avec succès!")
             else:
                 print("La table produits existe déjà.")
+                # Vérifier si la colonne code_produit existe
+                result = conn.execute(text("SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'produits' AND COLUMN_NAME = 'code_produit'"))
+                column_exists = result.fetchone()
+                if not column_exists:
+                    print("Ajout de la colonne code_produit à la table produits...")
+                    conn.execute(text("ALTER TABLE produits ADD code_produit NVARCHAR(255)"))
+                    print("Colonne code_produit ajoutée avec succès!")
+                    # Mettre à jour les valeurs NULL existantes pour éviter les erreurs de contrainte unique
+                    conn.execute(text("UPDATE produits SET code_produit = 'TEMP_' + CAST(id AS NVARCHAR(255)) WHERE code_produit IS NULL"))
+                    # Ajouter la contrainte unique
+                    conn.execute(text("ALTER TABLE produits ADD CONSTRAINT UQ_code_produit UNIQUE (code_produit)"))
+                    print("Contrainte unique ajoutée à code_produit.")
 
             # Vérifier si la table achats existe
             result = conn.execute(text("SELECT name FROM sys.tables WHERE name = 'achats'"))
